@@ -57,16 +57,21 @@ where
         app.add_plugins(GameSettingSupportPlugin::<SaveConfig>::default())
             .insert_resource(T::default())
             .insert_resource(CurrentSave(0))
+            .add_message::<QuickSave>()
             .add_message::<SaveGame>()
             .add_message::<DeleteSave>()
             .add_message::<LoadGame>()
             .add_message::<LoadRecent>()
-            .add_systems(Update, load::<T>.run_if(on_message::<LoadGame>))
-            .add_systems(Update, load_recent::<T>.run_if(on_message::<LoadRecent>))
-            .add_systems(Update, save::<T>.run_if(on_message::<SaveGame>))
-            .add_systems(Update, delete.run_if(on_message::<DeleteSave>));
+            .add_systems(Update, on_load::<T>.run_if(on_message::<LoadGame>))
+            .add_systems(Update, on_load_recent::<T>.run_if(on_message::<LoadRecent>))
+            .add_systems(Update, on_save::<T>.run_if(on_message::<SaveGame>))
+            .add_systems(Update, on_quick_save::<T>.run_if(on_message::<QuickSave>))
+            .add_systems(Update, on_delete.run_if(on_message::<DeleteSave>));
     }
 }
+
+#[derive(Message)]
+pub struct QuickSave;
 
 #[derive(Message, Deref, DerefMut)]
 pub struct SaveGame(pub u32);
@@ -95,7 +100,7 @@ impl GameSetting for SaveConfig {
     const DEFAULT_CONF: &'static str = "save_setting.conf";
 }
 
-fn load<T>(
+fn on_load<T>(
     mut data: ResMut<T>,
     mut load_message: MessageReader<LoadGame>,
     mut current_save: ResMut<CurrentSave>,
@@ -116,7 +121,7 @@ fn load<T>(
     }
 }
 
-fn load_recent<T>(mut data: ResMut<T>, mut current_save: ResMut<CurrentSave>, save_config: Res<SaveConfig>)
+fn on_load_recent<T>(mut data: ResMut<T>, mut current_save: ResMut<CurrentSave>, save_config: Res<SaveConfig>)
 where
     T: Resource + EncryptSave,
 {
@@ -131,7 +136,7 @@ where
     }
 }
 
-fn save<T>(
+fn on_save<T>(
     data: Res<T>,
     mut save_message: MessageReader<SaveGame>,
     mut current_save: ResMut<CurrentSave>,
@@ -140,38 +145,74 @@ fn save<T>(
 ) where
     T: Resource + EncryptSave,
 {
-    for save in save_message.read() {
-        let save_id = **save;
-        if save_id == 0 {
-            let file_name = format!("{}.dat", random_string());
-            let saved_path = save_config.save_dir.join(file_name.as_str());
+    for msg in save_message.read() {
+        let save_id = **msg;
+        save(
+            save_id,
+            &data,
+            &mut current_save,
+            &mut save_config,
+            &mut setting_changed,
+        );
+    }
+}
+
+fn on_quick_save<T>(
+    data: Res<T>,
+    mut current_save: ResMut<CurrentSave>,
+    mut save_config: ResMut<SaveConfig>,
+    mut setting_changed: MessageWriter<GameSettingChanged>,
+) where
+    T: Resource + EncryptSave,
+{
+    let save_id = **current_save;
+    save(
+        save_id,
+        &data,
+        &mut current_save,
+        &mut save_config,
+        &mut setting_changed,
+    );
+}
+
+fn save<T>(
+    save_id: u32,
+    data: &Res<T>,
+    current_save: &mut ResMut<CurrentSave>,
+    save_config: &mut ResMut<SaveConfig>,
+    setting_changed: &mut MessageWriter<GameSettingChanged>,
+) where
+    T: Resource + EncryptSave,
+{
+    if save_id == 0 {
+        let file_name = format!("{}.dat", random_string());
+        let saved_path = save_config.save_dir.join(file_name.as_str());
+        if let Err(_e) = data.save_to(saved_path.clone()) {
+            #[cfg(feature = "log")]
+            error!("Failed to save data {}: {}", saved_path.display(), _e);
+        } else {
+            // TODO: Handle max_key == max of u32
+            let new_key = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
+            save_config.saves.insert(new_key, PathBuf::from(file_name));
+            save_config.last_saved = new_key;
+            current_save.0 = new_key;
+            setting_changed.write(GameSettingChanged);
+        }
+    } else {
+        if let Some(saved_path) = save_config.saves.get(&save_id) {
+            let saved_path = save_config.save_dir.join(saved_path);
             if let Err(_e) = data.save_to(saved_path.clone()) {
                 #[cfg(feature = "log")]
                 error!("Failed to save data {}: {}", saved_path.display(), _e);
             } else {
-                // TODO: Handle max_key == max of u32
-                let new_key = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
-                save_config.saves.insert(new_key, PathBuf::from(file_name));
-                save_config.last_saved = new_key;
-                current_save.0 = new_key;
-                setting_changed.write(GameSettingChanged);
-            }
-        } else {
-            if let Some(saved_path) = save_config.saves.get(&save_id) {
-                let saved_path = save_config.save_dir.join(saved_path);
-                if let Err(_e) = data.save_to(saved_path.clone()) {
-                    #[cfg(feature = "log")]
-                    error!("Failed to save data {}: {}", saved_path.display(), _e);
-                } else {
-                    save_config.last_saved = save_id;
-                    current_save.0 = save_id;
-                }
+                save_config.last_saved = save_id;
+                current_save.0 = save_id;
             }
         }
     }
 }
 
-fn delete(
+fn on_delete(
     mut current_save: ResMut<CurrentSave>,
     mut delete_event: MessageReader<DeleteSave>,
     mut save_config: ResMut<SaveConfig>,
