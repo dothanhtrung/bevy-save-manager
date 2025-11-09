@@ -1,0 +1,28 @@
+[package]
+name = "bevy_save_manager"
+version = "0.1.0"
+authors = ["Trung Do <dothanhtrung@pm.me>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://gitlab.com/kimtinh/bevy-save-manager.git"
+keywords = ["bevy"]
+description = "Support tool to manage saved game in Bevy"
+exclude = ["assets", "examples", "tests", ".cargo"]
+categories = ["game-development"]
+
+[dependencies]
+bevy = { version = "0.17", features = ["bevy_state"], default-features = false }
+serde = { version = "1.0" }
+bincode = { version = "2.0", features = ["serde"] }
+anyhow = { version = "1.0" }
+simple_crypt = { version = "0.2" }
+dirs = { version = "6.0" }
+ron = { version = "0.11" }
+fastrand = "2.3"
+
+[dev-dependencies]
+bevy = { version = "0.17" }
+
+[features]
+default = []
+log = ["bevy/bevy_log"]
