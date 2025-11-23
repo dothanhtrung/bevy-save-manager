@@ -91,8 +91,6 @@ pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
         if cfg!(target_os = "android") {
             // It should be /data/data/com.yourapp.package/setting.txt
             PathBuf::from(Self::DEFAULT_CONF)
-        } else if let Some(data_local_dir) = dirs::data_local_dir() {
-            data_local_dir.join(Self::DEFAULT_CONF)
         } else {
             PathBuf::from(Self::DEFAULT_CONF)
         }
