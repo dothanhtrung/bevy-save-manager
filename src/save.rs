@@ -62,6 +62,8 @@ where
             .add_message::<DeleteSave>()
             .add_message::<LoadGame>()
             .add_message::<LoadRecent>()
+            .add_message::<LoadFinished>()
+            .add_message::<LoadFailed>()
             .add_systems(Update, on_load::<T>.run_if(on_message::<LoadGame>))
             .add_systems(Update, on_load_recent::<T>.run_if(on_message::<LoadRecent>))
             .add_systems(Update, on_save::<T>.run_if(on_message::<SaveGame>))
@@ -85,6 +87,12 @@ pub struct LoadGame(pub u32);
 #[derive(Message)]
 pub struct LoadRecent;
 
+#[derive(Message)]
+pub struct LoadFinished;
+
+#[derive(Message)]
+pub struct LoadFailed;
+
 #[derive(Resource, Deref, DerefMut)]
 pub struct CurrentSave(pub u32);
 
@@ -105,6 +113,8 @@ fn on_load<T>(
     mut load_message: MessageReader<LoadGame>,
     mut current_save: ResMut<CurrentSave>,
     save_config: Res<SaveConfig>,
+    mut load_finished: MessageWriter<LoadFinished>,
+    mut load_failed: MessageWriter<LoadFailed>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -112,27 +122,40 @@ fn on_load<T>(
         if let Some(saved_path) = save_config.saves.get(&id.0) {
             let saved_path = save_config.save_dir.join(saved_path);
             if let Err(_e) = data.load_from(&saved_path) {
+                load_failed.write(LoadFailed);
                 #[cfg(feature = "log")]
                 warn!("Failed to load save data {}: {}", saved_path.display(), _e);
             } else {
                 current_save.0 = id.0;
+                load_finished.write(LoadFinished);
             }
+        } else {
+            load_failed.write(LoadFailed);
         }
     }
 }
 
-fn on_load_recent<T>(mut data: ResMut<T>, mut current_save: ResMut<CurrentSave>, save_config: Res<SaveConfig>)
-where
+fn on_load_recent<T>(
+    mut data: ResMut<T>,
+    mut current_save: ResMut<CurrentSave>,
+    save_config: Res<SaveConfig>,
+    mut load_finished: MessageWriter<LoadFinished>,
+    mut load_failed: MessageWriter<LoadFailed>,
+) where
     T: Resource + EncryptSave,
 {
     if let Some(saved_path) = save_config.saves.get(&save_config.last_saved) {
         let saved_path = save_config.save_dir.join(saved_path);
         if let Err(_e) = data.load_from(&saved_path) {
+            load_failed.write(LoadFailed);
             #[cfg(feature = "log")]
             warn!("Failed to load save data {}: {}", saved_path.display(), _e);
         } else {
             current_save.0 = save_config.last_saved;
+            load_finished.write(LoadFinished);
         }
+    } else {
+        load_failed.write(LoadFailed);
     }
 }
 
