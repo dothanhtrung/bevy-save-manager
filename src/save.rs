@@ -63,7 +63,7 @@ where
             .add_message::<LoadGame>()
             .add_message::<LoadRecent>()
             .add_message::<LoadFinished>()
-            .add_message::<LoadFailed>()
+            .add_message::<SaveFinished>()
             .add_systems(Update, on_load::<T>.run_if(on_message::<LoadGame>))
             .add_systems(Update, on_load_recent::<T>.run_if(on_message::<LoadRecent>))
             .add_systems(Update, on_save::<T>.run_if(on_message::<SaveGame>))
@@ -87,11 +87,15 @@ pub struct LoadGame(pub u32);
 #[derive(Message)]
 pub struct LoadRecent;
 
-#[derive(Message)]
-pub struct LoadFinished;
+/// true: Load succeeded
+/// false: Load failed
+#[derive(Message, Deref, DerefMut, Default)]
+pub struct LoadFinished(bool);
 
-#[derive(Message)]
-pub struct LoadFailed;
+/// true: Save succeeded
+/// false: Save failed
+#[derive(Message, Deref, DerefMut, Default)]
+pub struct SaveFinished(bool);
 
 #[derive(Resource, Deref, DerefMut)]
 pub struct CurrentSave(pub u32);
@@ -114,7 +118,6 @@ fn on_load<T>(
     mut current_save: ResMut<CurrentSave>,
     save_config: Res<SaveConfig>,
     mut load_finished: MessageWriter<LoadFinished>,
-    mut load_failed: MessageWriter<LoadFailed>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -122,15 +125,15 @@ fn on_load<T>(
         if let Some(saved_path) = save_config.saves.get(&id.0) {
             let saved_path = save_config.save_dir.join(saved_path);
             if let Err(_e) = data.load_from(&saved_path) {
-                load_failed.write(LoadFailed);
+                load_finished.write(LoadFinished(false));
                 #[cfg(feature = "log")]
                 warn!("Failed to load save data {}: {}", saved_path.display(), _e);
             } else {
                 current_save.0 = id.0;
-                load_finished.write(LoadFinished);
+                load_finished.write(LoadFinished(true));
             }
         } else {
-            load_failed.write(LoadFailed);
+            load_finished.write(LoadFinished(false));
         }
     }
 }
@@ -140,22 +143,21 @@ fn on_load_recent<T>(
     mut current_save: ResMut<CurrentSave>,
     save_config: Res<SaveConfig>,
     mut load_finished: MessageWriter<LoadFinished>,
-    mut load_failed: MessageWriter<LoadFailed>,
 ) where
     T: Resource + EncryptSave,
 {
     if let Some(saved_path) = save_config.saves.get(&save_config.last_saved) {
         let saved_path = save_config.save_dir.join(saved_path);
         if let Err(_e) = data.load_from(&saved_path) {
-            load_failed.write(LoadFailed);
+            load_finished.write(LoadFinished(false));
             #[cfg(feature = "log")]
             warn!("Failed to load save data {}: {}", saved_path.display(), _e);
         } else {
             current_save.0 = save_config.last_saved;
-            load_finished.write(LoadFinished);
+            load_finished.write(LoadFinished(true));
         }
     } else {
-        load_failed.write(LoadFailed);
+        load_finished.write(LoadFinished(false));
     }
 }
 
@@ -165,6 +167,7 @@ fn on_save<T>(
     mut current_save: ResMut<CurrentSave>,
     mut save_config: ResMut<SaveConfig>,
     mut setting_changed: MessageWriter<GameSettingChanged>,
+    mut save_finished: MessageWriter<SaveFinished>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -176,6 +179,7 @@ fn on_save<T>(
             &mut current_save,
             &mut save_config,
             &mut setting_changed,
+            &mut save_finished,
         );
     }
 }
@@ -185,6 +189,7 @@ fn on_quick_save<T>(
     mut current_save: ResMut<CurrentSave>,
     mut save_config: ResMut<SaveConfig>,
     mut setting_changed: MessageWriter<GameSettingChanged>,
+    mut save_finished: MessageWriter<SaveFinished>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -195,6 +200,7 @@ fn on_quick_save<T>(
         &mut current_save,
         &mut save_config,
         &mut setting_changed,
+        &mut save_finished,
     );
 }
 
@@ -204,6 +210,7 @@ fn save<T>(
     current_save: &mut ResMut<CurrentSave>,
     save_config: &mut ResMut<SaveConfig>,
     setting_changed: &mut MessageWriter<GameSettingChanged>,
+    save_finished: &mut MessageWriter<SaveFinished>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -213,6 +220,7 @@ fn save<T>(
         if let Err(_e) = data.save_to(saved_path.clone()) {
             #[cfg(feature = "log")]
             error!("Failed to save data {}: {}", saved_path.display(), _e);
+            save_finished.write(SaveFinished(false));
         } else {
             // TODO: Handle max_key == max of u32
             let new_key = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
@@ -220,6 +228,7 @@ fn save<T>(
             save_config.last_saved = new_key;
             current_save.0 = new_key;
             setting_changed.write(GameSettingChanged);
+            save_finished.write(SaveFinished(true));
         }
     } else {
         if let Some(saved_path) = save_config.saves.get(&save_id) {
@@ -227,9 +236,11 @@ fn save<T>(
             if let Err(_e) = data.save_to(saved_path.clone()) {
                 #[cfg(feature = "log")]
                 error!("Failed to save data {}: {}", saved_path.display(), _e);
+                save_finished.write(SaveFinished(false));
             } else {
                 save_config.last_saved = save_id;
                 current_save.0 = save_id;
+                save_finished.write(SaveFinished(true));
             }
         }
     }
@@ -257,18 +268,23 @@ fn on_delete(
 }
 
 pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
-    const ENCR_KEY: &'static str = "0123456789abcdef";
+    const ENCR_KEY: &'static str = "";
 
     fn load_from(&mut self, config_path: &Path) -> anyhow::Result<()> {
-        let enc_saved = std::fs::read(config_path)?;
-        let decrypted = decrypt(enc_saved.as_slice(), Self::ENCR_KEY.as_bytes())?;
+        let enc_saved = fs::read(config_path)?;
+        let decrypted = if Self::ENCR_KEY.is_empty() {
+            enc_saved
+        } else {
+            decrypt(enc_saved.as_slice(), Self::ENCR_KEY.as_bytes())?
+        };
         (*self, _) = bincode::serde::decode_from_slice(decrypted.as_slice(), bincode::config::legacy())?;
         Ok(())
     }
 
     fn save_to(&self, saved_path: PathBuf) -> anyhow::Result<()> {
         let data = bincode::serde::encode_to_vec(self, bincode::config::legacy())?;
-        let enc_saved = encrypt(data.as_slice(), Self::ENCR_KEY.as_bytes())?;
+        let enc_saved =
+            if Self::ENCR_KEY.is_empty() { data } else { encrypt(data.as_slice(), Self::ENCR_KEY.as_bytes())? };
 
         #[cfg(not(target_arch = "wasm32"))]
         IoTaskPool::get()
