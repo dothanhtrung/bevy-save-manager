@@ -92,6 +92,7 @@ pub struct LoadRecent;
 #[derive(Message, Deref, DerefMut, Default)]
 pub struct LoadFinished(bool);
 
+/// Not actual sent when saving is finished writing to disk
 /// true: Save succeeded
 /// false: Save failed
 #[derive(Message, Deref, DerefMut, Default)]
@@ -100,7 +101,7 @@ pub struct SaveFinished(bool);
 #[derive(Resource, Deref, DerefMut)]
 pub struct CurrentSave(pub u32);
 
-#[derive(Resource, Deserialize, Serialize, Clone, Default)]
+#[derive(Resource, Deserialize, Serialize, Clone)]
 pub struct SaveConfig {
     /// Valid save id start from 1
     saves: HashMap<u32, PathBuf>,
@@ -108,8 +109,18 @@ pub struct SaveConfig {
     last_saved: u32,
 }
 
+impl Default for SaveConfig {
+    fn default() -> Self {
+        Self {
+            saves: HashMap::new(),
+            save_dir: PathBuf::from("saves"),
+            last_saved: 0,
+        }
+    }
+}
+
 impl GameSetting for SaveConfig {
-    const DEFAULT_CONF: &'static str = "save_setting.conf";
+    const DEFAULT_CONF: &'static str = "saves/save_setting.conf";
 }
 
 fn on_load<T>(
