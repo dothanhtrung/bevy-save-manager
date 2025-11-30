@@ -196,23 +196,13 @@ fn on_save<T>(
 }
 
 fn on_quick_save<T>(
-    data: Res<T>,
     mut current_save: ResMut<CurrentSave>,
-    mut save_config: ResMut<SaveConfig>,
-    mut setting_changed: MessageWriter<GameSettingChanged>,
-    mut save_finished: MessageWriter<SaveFinished>,
+    mut save_message: MessageWriter<SaveGame>,
 ) where
     T: Resource + EncryptSave,
 {
     let save_id = **current_save;
-    save(
-        save_id,
-        &data,
-        &mut current_save,
-        &mut save_config,
-        &mut setting_changed,
-        &mut save_finished,
-    );
+    save_message.write(SaveGame(save_id));
 }
 
 fn save<T>(
