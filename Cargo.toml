@@ -13,7 +13,7 @@ categories = ["game-development"]
 [dependencies]
 bevy = { version = "0.17", features = ["bevy_state"], default-features = false }
 serde = { version = "1.0" }
-bincode = { version = "2.0", features = ["serde"] }
+postcard = { version = "1.1" , features = ["alloc"]}
 anyhow = { version = "1.0" }
 simple_crypt = { version = "0.2" }
 ron = { version = "0.12" }

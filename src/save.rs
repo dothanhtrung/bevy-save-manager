@@ -195,10 +195,8 @@ fn on_save<T>(
     }
 }
 
-fn on_quick_save<T>(
-    mut current_save: ResMut<CurrentSave>,
-    mut save_message: MessageWriter<SaveGame>,
-) where
+fn on_quick_save<T>(current_save: Res<CurrentSave>, mut save_message: MessageWriter<SaveGame>)
+where
     T: Resource + EncryptSave,
 {
     let save_id = **current_save;
@@ -278,12 +276,12 @@ pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
         } else {
             decrypt(enc_saved.as_slice(), Self::ENCR_KEY.as_bytes())?
         };
-        (*self, _) = bincode::serde::decode_from_slice(decrypted.as_slice(), bincode::config::legacy())?;
+        *self = postcard::from_bytes(decrypted.as_slice())?;
         Ok(())
     }
 
     fn save_to(&self, saved_path: PathBuf) -> anyhow::Result<()> {
-        let data = bincode::serde::encode_to_vec(self, bincode::config::legacy())?;
+        let data = postcard::to_allocvec(self)?;
         let enc_saved =
             if Self::ENCR_KEY.is_empty() { data } else { encrypt(data.as_slice(), Self::ENCR_KEY.as_bytes())? };
 
