@@ -1,9 +1,4 @@
 use bevy::app::App;
-use bevy::asset::ron::de::from_reader;
-use bevy::asset::ron::ser::{
-    to_string_pretty,
-    PrettyConfig,
-};
 #[cfg(feature = "log")]
 use bevy::prelude::warn;
 use bevy::prelude::{
@@ -26,6 +21,8 @@ use serde::{
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use ron::de::from_reader;
+use ron::ser::{to_string_pretty, PrettyConfig};
 
 #[derive(Default)]
 pub struct GameSettingSupportPlugin<T>
