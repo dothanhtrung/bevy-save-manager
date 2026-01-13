@@ -19,8 +19,8 @@ check:
   stage: build
   script:
     - rustc --version && cargo --version  # Print version info for debugging
-    - /usr/local/cargo/bin/cargo-sweep sweep -t 60 || true
     - cargo check --examples
+    - /usr/local/cargo/bin/cargo-sweep sweep -t 60 || true
   rules:
     - changes:
         - Cargo.toml

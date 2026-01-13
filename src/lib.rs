@@ -1,5 +1,5 @@
 //! ### Plugin
 //!
 
-pub mod setting;
 pub mod save;
+pub mod setting;

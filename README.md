@@ -28,9 +28,9 @@ Please see [LICENSE](./LICENSE).
 Compatible Bevy Versions
 ------------------------
 
-| bevy | bevy_save_manager |
-|------|-------------------|
-| 0.17 | 0.1               |
+| bevy      | bevy_save_manager |
+|-----------|-------------------|
+| 0.17-0.18 | 0.1               |
 
 ---------
 

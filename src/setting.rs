@@ -22,7 +22,10 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use ron::de::from_reader;
-use ron::ser::{to_string_pretty, PrettyConfig};
+use ron::ser::{
+    to_string_pretty,
+    PrettyConfig,
+};
 
 #[derive(Default)]
 pub struct GameSettingSupportPlugin<T>
