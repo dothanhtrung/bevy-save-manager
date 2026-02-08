@@ -1,3 +1,4 @@
+use crate::get_relative_path;
 use bevy::app::App;
 #[cfg(feature = "log")]
 use bevy::prelude::warn;
@@ -14,6 +15,11 @@ use bevy::prelude::{
     Update,
 };
 use bevy::tasks::IoTaskPool;
+use ron::de::from_reader;
+use ron::ser::{
+    to_string_pretty,
+    PrettyConfig,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -21,11 +27,6 @@ use serde::{
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use ron::de::from_reader;
-use ron::ser::{
-    to_string_pretty,
-    PrettyConfig,
-};
 
 #[derive(Default)]
 pub struct GameSettingSupportPlugin<T>
@@ -88,12 +89,11 @@ pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
     const DEFAULT_CONF: &'static str = "game_setting.conf";
 
     fn config_path() -> PathBuf {
-        if cfg!(target_os = "android") {
-            // It should be /data/data/com.yourapp.package/setting.txt
-            PathBuf::from(Self::DEFAULT_CONF)
-        } else {
-            PathBuf::from(Self::DEFAULT_CONF)
+        let mut ret = PathBuf::from(Self::DEFAULT_CONF);
+        if !ret.is_absolute() {
+            ret = get_relative_path().join(ret);
         }
+        ret
     }
 
     fn load(&mut self) -> anyhow::Result<()> {

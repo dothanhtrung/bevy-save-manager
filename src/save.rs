@@ -1,3 +1,4 @@
+use crate::get_relative_path;
 use crate::setting::{
     GameSetting,
     GameSettingChanged,
@@ -215,7 +216,10 @@ fn save<T>(
 {
     if save_id == 0 {
         let file_name = format!("{}.dat", random_string());
-        let saved_path = save_config.save_dir.join(file_name.as_str());
+        let mut saved_path = save_config.save_dir.join(file_name.as_str());
+        if !saved_path.is_absolute() {
+            saved_path = get_relative_path().join(saved_path);
+        }
         if let Err(_e) = data.save_to(saved_path.clone()) {
             #[cfg(feature = "log")]
             error!("Failed to save data {}: {}", saved_path.display(), _e);

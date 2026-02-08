@@ -1,5 +1,20 @@
 //! ### Plugin
 //!
 
+use std::env;
+use std::path::PathBuf;
+
 pub mod save;
 pub mod setting;
+
+fn get_relative_path() -> PathBuf {
+    if cfg!(target_os = "linux") {
+        if let Ok(appimage_path) = env::var("APPIMAGE") {
+            let path = PathBuf::from(appimage_path);
+            if let Some(parent_dir) = path.parent() {
+                return parent_dir.to_path_buf();
+            }
+        }
+    }
+    PathBuf::from(".")
+}
