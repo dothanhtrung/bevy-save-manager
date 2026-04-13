@@ -1,8 +1,8 @@
 [package]
 name = "bevy_save_manager"
-version = "0.1.1"
+version = "0.1.0"
 authors = ["Trung Do <dothanhtrung@pm.me>"]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://gitlab.com/kimtinh/bevy-save-manager.git"
 keywords = ["bevy"]
@@ -12,12 +12,14 @@ categories = ["game-development"]
 
 [dependencies]
 bevy = { version = ">=0.17", features = ["bevy_state", "bevy_asset"], default-features = false }
+bevy_rand = { version = ">=0.14", default-features = false, features = ["wyrand"] }
+rand = { version = "0.10", default-features = false }
 serde = { version = "1.0" }
-postcard = { version = "1.1" , features = ["alloc"]}
+postcard = { version = "1.1", features = ["alloc"] }
 anyhow = { version = "1.0" }
 simple_crypt = { version = "0.2" }
 ron = { version = "0.12" }
-fastrand = "2.3"
+crossbeam-channel = { version = "0.5", default-features = false }
 
 [dev-dependencies]
 bevy = { version = ">=0.17" }
