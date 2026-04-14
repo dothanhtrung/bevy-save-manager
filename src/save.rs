@@ -10,9 +10,7 @@ use bevy::app::{
     Startup,
 };
 #[cfg(feature = "log")]
-use bevy::prelude::{
-    error,
-};
+use bevy::prelude::error;
 use bevy::prelude::{
     on_message,
     Commands,
@@ -52,9 +50,7 @@ use simple_crypt::{
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
-use std::io::{
-    Write,
-};
+use std::io::Write;
 use std::path::{
     Path,
     PathBuf,
@@ -89,7 +85,7 @@ where
             .add_systems(Update, on_load::<T>.run_if(on_message::<LoadGame>))
             .add_systems(Update, on_load_recent.run_if(on_message::<LoadRecent>))
             .add_systems(Update, on_save::<T>.run_if(on_message::<SaveGame>))
-            .add_systems(Update, on_new_save.run_if(on_message::<NewSave>))
+            .add_systems(Update, on_new_save::<T>.run_if(on_message::<NewSave>))
             .add_systems(Update, on_quick_save.run_if(on_message::<QuickSave>))
             .add_systems(Update, on_delete.run_if(on_message::<DeleteSave>));
     }
@@ -98,11 +94,10 @@ where
 #[derive(Message)]
 pub struct QuickSave;
 
-#[derive(Message)]
-pub struct NewSave;
+#[derive(Message, Deref, DerefMut)]
+pub struct NewSave(pub String);
 
 /// Tell system to save data to file by save id.
-/// If save id is 0, new save will be created.
 #[derive(Message, Deref, DerefMut)]
 pub struct SaveGame(pub u32);
 
@@ -126,11 +121,17 @@ pub struct SaveFinished(anyhow::Result<()>);
 #[derive(Resource, Deref, DerefMut)]
 pub struct CurrentSave(pub u32);
 
+#[derive(Deserialize, Serialize, Clone)]
+pub struct SaveInfo {
+    pub name: String,
+    pub path: PathBuf,
+}
+
 #[derive(Resource, Deserialize, Serialize, Clone)]
 pub struct SaveConfig {
     /// Valid save id start from 1
-    saves: HashMap<u32, PathBuf>,
-    save_dir: PathBuf,
+    pub saves: HashMap<u32, SaveInfo>,
+    pub save_dir: PathBuf,
     last_saved: u32,
 }
 
@@ -188,8 +189,8 @@ fn on_load<T>(
     T: Resource + EncryptSave,
 {
     for id in load_message.read() {
-        if let Some(saved_path) = save_config.saves.get(&id.0) {
-            let saved_path = save_config.save_dir.join(saved_path);
+        if let Some(info) = save_config.saves.get(&id.0) {
+            let saved_path = save_config.save_dir.join(&info.path);
             let sender = channel.sender.clone();
             let save_id = id.0;
             IoTaskPool::get()
@@ -207,36 +208,51 @@ fn on_load_recent(save_config: Res<SaveConfig>, mut load_message: MessageWriter<
     load_message.write(LoadGame(save_config.last_saved));
 }
 
+fn on_new_save<T>(
+    mut new_save_msg: MessageReader<NewSave>,
+    mut rng: Single<&mut WyRand, With<GlobalRng>>,
+    mut save_config: ResMut<SaveConfig>,
+    mut setting_changed: MessageWriter<GameSettingChanged>,
+    channel: Res<IoChannel>,
+    data: Res<T>,
+) where
+    T: Resource + EncryptSave,
+{
+    for msg in new_save_msg.read() {
+        let file_name = format!("{}.dat", random_string(&mut rng));
+        let mut saved_path = save_config.save_dir.join(file_name.as_str());
+        if !saved_path.is_absolute() {
+            saved_path = get_relative_path().join(saved_path);
+        }
+
+        // TODO: Handle max_key == max of u32
+        let save_id = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
+        data.save_to(saved_path.clone(), &channel, save_id);
+
+        save_config.saves.insert(
+            save_id,
+            SaveInfo {
+                name: msg.0.clone(),
+                path: PathBuf::from(file_name),
+            },
+        );
+        setting_changed.write(GameSettingChanged);
+    }
+}
+
 fn on_save<T>(
     data: Res<T>,
     mut save_message: MessageReader<SaveGame>,
     mut save_config: ResMut<SaveConfig>,
-    mut rng: Single<&mut WyRand, With<GlobalRng>>,
     channel: Res<IoChannel>,
-    mut setting_changed: MessageWriter<GameSettingChanged>,
 ) where
     T: Resource + EncryptSave,
 {
     for msg in save_message.read() {
-        let mut save_id = **msg;
-        if save_id == 0 {
-            let file_name = format!("{}.dat", random_string(&mut rng));
-            let mut saved_path = save_config.save_dir.join(file_name.as_str());
-            if !saved_path.is_absolute() {
-                saved_path = get_relative_path().join(saved_path);
-            }
-
-            // TODO: Handle max_key == max of u32
-            save_id = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
+        let save_id = **msg;
+        if let Some(info) = save_config.saves.get(&save_id) {
+            let saved_path = save_config.save_dir.join(&info.path);
             data.save_to(saved_path.clone(), &channel, save_id);
-
-            save_config.saves.insert(save_id, PathBuf::from(file_name));
-            setting_changed.write(GameSettingChanged);
-        } else {
-            if let Some(saved_path) = save_config.saves.get(&save_id) {
-                let saved_path = save_config.save_dir.join(saved_path);
-                data.save_to(saved_path.clone(), &channel, save_id);
-            }
         }
     }
 }
@@ -274,9 +290,6 @@ fn listen_channel<T>(
         }
     }
 }
-fn on_new_save(mut save_message: MessageWriter<SaveGame>) {
-    save_message.write(SaveGame(0));
-}
 
 fn on_quick_save(current_save: Res<CurrentSave>, mut save_message: MessageWriter<SaveGame>) {
     let save_id = **current_save;
@@ -289,10 +302,10 @@ fn on_delete(
     mut save_config: ResMut<SaveConfig>,
 ) {
     for saved_id in delete_event.read() {
-        if let Some(saved_path) = save_config.saves.get(saved_id) {
-            if let Err(_e) = fs::remove_file(saved_path) {
+        if let Some(info) = save_config.saves.get(saved_id) {
+            if let Err(_e) = fs::remove_file(&info.path) {
                 #[cfg(feature = "log")]
-                error!("Failed to delete save data {}: {}", saved_path.display(), _e);
+                error!("Failed to delete save data {}: {}", info.path.display(), _e);
             } else {
                 save_config.saves.remove(saved_id);
                 current_save.0 = 0;
