@@ -1,8 +1,5 @@
 // TODO: Combine raw_save and encrypt_save
-use crate::{
-    get_relative_path,
-    setup_channel,
-};
+use crate::get_relative_path;
 use bevy::app::App;
 #[cfg(feature = "log")]
 use bevy::prelude::warn;
@@ -33,14 +30,14 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Default)]
-pub struct RawSavePlugin<T>
+pub struct GameSettingPlugin<T>
 where
     T: Resource + Default + GameSetting + Clone,
 {
     _config: Option<T>,
 }
 
-impl<T> Plugin for RawSavePlugin<T>
+impl<T> Plugin for GameSettingPlugin<T>
 where
     T: Resource + Default + GameSetting + Clone,
 {
@@ -48,7 +45,6 @@ where
         app.insert_resource(T::default())
             .add_message::<GameSettingChanged>()
             .add_message::<GameSettingLoaded>()
-            .add_systems(Startup, setup_channel)
             .add_systems(Startup, load_config::<T>)
             .add_systems(Update, save_config::<T>.run_if(on_message::<GameSettingChanged>));
     }
