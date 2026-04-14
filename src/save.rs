@@ -55,6 +55,7 @@ use std::path::{
     Path,
     PathBuf,
 };
+use std::time::SystemTime;
 
 #[derive(Default)]
 pub struct GameSavePlugin<T>
@@ -125,6 +126,10 @@ pub struct CurrentSave(pub u32);
 pub struct SaveInfo {
     pub name: String,
     pub path: PathBuf,
+    // TODO: Play time in seconds
+    // pub duration: u64,
+    /// Modified time in UNIX epoch
+    pub modified_at: u64,
 }
 
 #[derive(Resource, Deserialize, Serialize, Clone)]
@@ -229,11 +234,16 @@ fn on_new_save<T>(
         let save_id = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
         data.save_to(saved_path.clone(), &channel, save_id);
 
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         save_config.saves.insert(
             save_id,
             SaveInfo {
                 name: msg.0.clone(),
                 path: PathBuf::from(file_name),
+                modified_at: now,
             },
         );
         setting_changed.write(GameSettingChanged);
