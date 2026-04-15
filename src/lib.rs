@@ -1,7 +1,6 @@
 //! ### Plugin
 //!
 
-use bevy::prelude::Resource;
 use std::env;
 use std::path::PathBuf;
 

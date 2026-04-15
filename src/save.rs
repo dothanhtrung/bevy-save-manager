@@ -73,7 +73,8 @@ where
         app.add_plugins(EntropyPlugin::<WyRand>::default())
             .add_plugins(GameSettingPlugin::<SaveConfig>::default())
             .insert_resource(T::default())
-            .insert_resource(CurrentSave(0))
+            .insert_resource(CurrentSave::default())
+            .insert_resource(PlayTimeTrack(0))
             .add_message::<QuickSave>()
             .add_message::<SaveGame>()
             .add_message::<DeleteSave>()
@@ -119,15 +120,27 @@ pub struct LoadFinished(anyhow::Result<()>);
 #[derive(Message, Deref, DerefMut)]
 pub struct SaveFinished(anyhow::Result<()>);
 
+#[derive(Resource, Default)]
+pub struct CurrentSave {
+    pub save_id: u32,
+    pub duration: u64,
+}
+
+impl CurrentSave {
+    fn reset(&mut self) {
+        self.save_id = 0;
+        self.duration = 0;
+    }
+}
+
 #[derive(Resource, Deref, DerefMut)]
-pub struct CurrentSave(pub u32);
+struct PlayTimeTrack(u64);
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct SaveInfo {
     pub name: String,
     pub path: PathBuf,
-    // TODO: Play time in seconds
-    // pub duration: u64,
+    pub duration: u64,
     /// Modified time in UNIX epoch
     pub modified_at: u64,
 }
@@ -218,6 +231,7 @@ fn on_new_save<T>(
     mut rng: Single<&mut WyRand, With<GlobalRng>>,
     mut save_config: ResMut<SaveConfig>,
     mut setting_changed: MessageWriter<GameSettingChanged>,
+    mut play_time_track: ResMut<PlayTimeTrack>,
     channel: Res<IoChannel>,
     data: Res<T>,
 ) where
@@ -243,17 +257,19 @@ fn on_new_save<T>(
             SaveInfo {
                 name: msg.0.clone(),
                 path: PathBuf::from(file_name),
+                duration: 0,
                 modified_at: now,
             },
         );
         setting_changed.write(GameSettingChanged);
+        **play_time_track = now;
     }
 }
 
 fn on_save<T>(
-    data: Res<T>,
+    save_data: Res<T>,
     mut save_message: MessageReader<SaveGame>,
-    mut save_config: ResMut<SaveConfig>,
+    save_config: Res<SaveConfig>,
     channel: Res<IoChannel>,
 ) where
     T: Resource + EncryptSave,
@@ -262,7 +278,7 @@ fn on_save<T>(
         let save_id = **msg;
         if let Some(info) = save_config.saves.get(&save_id) {
             let saved_path = save_config.save_dir.join(&info.path);
-            data.save_to(saved_path.clone(), &channel, save_id);
+            save_data.save_to(saved_path.clone(), &channel, save_id);
         }
     }
 }
@@ -274,27 +290,45 @@ fn listen_channel<T>(
     mut load_message: MessageWriter<LoadFinished>,
     mut current_save: ResMut<CurrentSave>,
     mut save_config: ResMut<SaveConfig>,
+    mut setting_changed: MessageWriter<GameSettingChanged>,
+    mut play_time_track: ResMut<PlayTimeTrack>,
 ) where
     T: Resource + EncryptSave,
 {
     for msg in channel.receiver.try_iter() {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         match msg.action {
             IoAction::Save(save_id) => {
                 save_config.last_saved = save_id;
-                current_save.0 = save_id;
+                current_save.save_id = save_id;
 
                 save_message.write(SaveFinished(msg.result));
+
+                if let Some(info) = save_config.saves.get_mut(&save_id) {
+                    current_save.duration += now - **play_time_track;
+                    info.duration = current_save.duration;
+                    **play_time_track = now;
+                    setting_changed.write(GameSettingChanged);
+                }
             }
             IoAction::Load((save_id, data)) => {
                 if msg.result.is_ok() {
-                    current_save.0 = save_id;
+                    current_save.save_id = save_id;
+                    if let Some(info) = save_config.saves.get(&save_id) {
+                        current_save.duration = info.duration;
+                    }
                     match postcard::from_bytes(data.as_slice()) {
                         Ok(ret) => *save_data = ret,
                         Err(e) => {
                             load_message.write(LoadFinished(Err(anyhow!(e))));
+                            continue;
                         }
                     }
                     load_message.write(LoadFinished(msg.result));
+                    **play_time_track = now;
                 }
             }
         }
@@ -302,7 +336,7 @@ fn listen_channel<T>(
 }
 
 fn on_quick_save(current_save: Res<CurrentSave>, mut save_message: MessageWriter<SaveGame>) {
-    let save_id = **current_save;
+    let save_id = current_save.save_id;
     save_message.write(SaveGame(save_id));
 }
 
@@ -318,7 +352,7 @@ fn on_delete(
                 error!("Failed to delete save data {}: {}", info.path.display(), _e);
             } else {
                 save_config.saves.remove(saved_id);
-                current_save.0 = 0;
+                current_save.reset();
                 if save_config.last_saved == **saved_id {
                     save_config.last_saved = 0;
                 }

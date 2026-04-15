@@ -10,7 +10,6 @@ cache: &global_cache
     - target/
     - .cargo/registry/index
     - .cargo/registry/cache
-    - .cargo/bin
   policy: pull-push
 
 variables:
