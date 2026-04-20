@@ -114,11 +114,11 @@ pub struct LoadRecent;
 
 /// Fired when loading from file finished
 #[derive(Message, Deref, DerefMut)]
-pub struct LoadFinished(anyhow::Result<()>);
+pub struct LoadFinished(pub anyhow::Result<()>);
 
 /// Fired when saving to file finished
 #[derive(Message, Deref, DerefMut)]
-pub struct SaveFinished(anyhow::Result<()>);
+pub struct SaveFinished(pub anyhow::Result<()>);
 
 #[derive(Resource, Default)]
 pub struct CurrentSave {
