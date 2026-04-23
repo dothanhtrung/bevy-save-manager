@@ -13,6 +13,16 @@ bevy_save_manager
 
 </div>
 
+Convenience way to store & manage setting/save game.
+
+Features (not support WASM):
+* Setting file:
+    * Save/Load setting in ron format .
+* Save file:
+    * Save/Load save file in binary format.
+    * Encrypt/Decrypt save file.
+    * Multiple saves.
+    * Track play duration & modified timestamp.
 
 Quickstart
 ----------

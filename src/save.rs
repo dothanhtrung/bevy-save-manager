@@ -9,6 +9,7 @@ use bevy::app::{
     App,
     Startup,
 };
+use bevy::platform::collections::HashMap;
 #[cfg(feature = "log")]
 use bevy::prelude::error;
 use bevy::prelude::{
@@ -47,7 +48,6 @@ use simple_crypt::{
     decrypt,
     encrypt,
 };
-use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -139,7 +139,9 @@ struct PlayTimeTrack(u64);
 #[derive(Deserialize, Serialize, Clone)]
 pub struct SaveInfo {
     pub name: String,
+    /// Path to save file
     pub path: PathBuf,
+    /// Play duration in UNIX epoch
     pub duration: u64,
     /// Modified time in UNIX epoch
     pub modified_at: u64,
@@ -346,12 +348,12 @@ fn on_delete(
     mut save_config: ResMut<SaveConfig>,
 ) {
     for saved_id in delete_event.read() {
-        if let Some(info) = save_config.saves.get(saved_id) {
+        if let Some(info) = save_config.saves.get(&saved_id.0) {
             if let Err(_e) = fs::remove_file(&info.path) {
                 #[cfg(feature = "log")]
                 error!("Failed to delete save data {}: {}", info.path.display(), _e);
             } else {
-                save_config.saves.remove(saved_id);
+                save_config.saves.remove(&saved_id.0);
                 current_save.reset();
                 if save_config.last_saved == **saved_id {
                     save_config.last_saved = 0;
