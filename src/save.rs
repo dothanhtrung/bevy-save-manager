@@ -60,14 +60,14 @@ use std::time::SystemTime;
 #[derive(Default)]
 pub struct GameSavePlugin<T>
 where
-    T: Resource + Default + EncryptSave + Clone,
+    T: Resource + Default + EncryptSave,
 {
     _config: Option<T>,
 }
 
 impl<T> Plugin for GameSavePlugin<T>
 where
-    T: Resource + Default + EncryptSave + Clone,
+    T: Resource + Default + EncryptSave,
 {
     fn build(&self, app: &mut App) {
         app.add_plugins(EntropyPlugin::<WyRand>::default())

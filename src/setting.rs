@@ -32,14 +32,14 @@ use std::path::PathBuf;
 #[derive(Default)]
 pub struct GameSettingPlugin<T>
 where
-    T: Resource + Default + GameSetting + Clone,
+    T: Resource + Default + GameSetting,
 {
     _config: Option<T>,
 }
 
 impl<T> Plugin for GameSettingPlugin<T>
 where
-    T: Resource + Default + GameSetting + Clone,
+    T: Resource + Default + GameSetting,
 {
     fn build(&self, app: &mut App) {
         app.insert_resource(T::default())
