@@ -70,11 +70,15 @@ where
     T: Resource + Default + EncryptSave,
 {
     fn build(&self, app: &mut App) {
-        app.add_plugins(EntropyPlugin::<WyRand>::default())
-            .add_plugins(GameSettingPlugin::<SaveConfig>::default())
+        if !app.is_plugin_added::<EntropyPlugin<WyRand>>() {
+            app.add_plugins(EntropyPlugin::<WyRand>::default());
+        }
+
+        app.add_plugins(GameSettingPlugin::<SaveConfig>::default())
             .insert_resource(T::default())
             .insert_resource(CurrentSave::default())
             .insert_resource(PlayTimeTrack(0))
+            .add_message::<NewSave>()
             .add_message::<QuickSave>()
             .add_message::<SaveGame>()
             .add_message::<DeleteSave>()
@@ -93,9 +97,11 @@ where
     }
 }
 
+/// Save to current save file.
 #[derive(Message)]
 pub struct QuickSave;
 
+/// Create new save
 #[derive(Message, Deref, DerefMut)]
 pub struct NewSave(pub String);
 
@@ -273,6 +279,7 @@ fn on_save<T>(
     mut save_message: MessageReader<SaveGame>,
     save_config: Res<SaveConfig>,
     channel: Res<IoChannel>,
+    mut new_save: MessageWriter<NewSave>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -281,6 +288,9 @@ fn on_save<T>(
         if let Some(info) = save_config.saves.get(&save_id) {
             let saved_path = save_config.save_dir.join(&info.path);
             save_data.save_to(saved_path.clone(), &channel, save_id);
+        } else {
+            // save_id does not exist. Create a new save.
+            new_save.write(NewSave(String::new()));
         }
     }
 }
