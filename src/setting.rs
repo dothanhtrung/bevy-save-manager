@@ -1,10 +1,14 @@
-// TODO: Combine raw_save and encrypt_save
-use crate::get_relative_path;
+use crate::file_format::ron_file;
+use crate::{
+    FileFormat,
+    get_relative_path,
+};
 use bevy::app::App;
 #[cfg(feature = "log")]
 use bevy::prelude::warn;
 use bevy::prelude::{
-    on_message,
+    Deref,
+    DerefMut,
     IntoScheduleConfigs,
     Message,
     MessageWriter,
@@ -14,19 +18,12 @@ use bevy::prelude::{
     Resource,
     Startup,
     Update,
-};
-use bevy::tasks::IoTaskPool;
-use ron::de::from_reader;
-use ron::ser::{
-    to_string_pretty,
-    PrettyConfig,
+    on_message,
 };
 use serde::{
     Deserialize,
     Serialize,
 };
-use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -43,6 +40,7 @@ where
 {
     fn build(&self, app: &mut App) {
         app.insert_resource(T::default())
+            .insert_resource(SettingFileFormat::default())
             .add_message::<GameSettingChanged>()
             .add_message::<GameSettingLoaded>()
             .add_systems(Startup, load_config::<T>)
@@ -50,17 +48,23 @@ where
     }
 }
 
+#[derive(Resource, Default, Deref, DerefMut)]
+pub struct SettingFileFormat(pub FileFormat);
+
 #[derive(Message)]
 pub struct GameSettingChanged;
 
 #[derive(Message)]
 pub struct GameSettingLoaded;
 
-fn load_config<T>(mut config: ResMut<T>, mut event: MessageWriter<GameSettingLoaded>)
-where
+fn load_config<T>(
+    mut config: ResMut<T>,
+    mut event: MessageWriter<GameSettingLoaded>,
+    file_format: Res<SettingFileFormat>,
+) where
     T: Resource + GameSetting,
 {
-    if let Err(_e) = config.load() {
+    if let Err(_e) = config.load(&file_format.0) {
         #[cfg(feature = "log")]
         warn!(
             "Failed to load game config {} : {}",
@@ -72,11 +76,11 @@ where
     }
 }
 
-fn save_config<T>(config: Res<T>)
+fn save_config<T>(config: Res<T>, file_format: Res<SettingFileFormat>)
 where
     T: Resource + GameSetting,
 {
-    if let Err(_e) = config.save() {
+    if let Err(_e) = config.save(&file_format.0) {
         #[cfg(feature = "log")]
         warn!(
             "Failed to save game config {}: {}",
@@ -86,6 +90,7 @@ where
     }
 }
 
+// TODO: Return Load/Save Result
 pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
     const DEFAULT_CONF: &'static str = "game_setting.conf";
 
@@ -97,35 +102,23 @@ pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
         ret
     }
 
-    fn load(&mut self) -> anyhow::Result<()> {
-        self.load_from(&Self::config_path())
-    }
-
-    fn load_from(&mut self, config_path: &PathBuf) -> anyhow::Result<()> {
-        let file = File::open(config_path)?;
-        *self = from_reader(file)?;
+    fn load(&mut self, file_format: &FileFormat) -> anyhow::Result<()> {
+        match *file_format {
+            FileFormat::Ron => {
+                *self = ron_file::load_from(&Self::config_path())?;
+            }
+            FileFormat::Bin => {}
+        }
         Ok(())
     }
 
-    fn save(&self) -> anyhow::Result<()> {
-        self.save_to(Self::config_path())
-    }
-
-    fn save_to(&self, config_path: PathBuf) -> anyhow::Result<()> {
-        let pretty = PrettyConfig::default();
-        let ron_str = to_string_pretty(self, pretty)?;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        IoTaskPool::get()
-            .spawn(async move {
-                if let Some(parent_dir) = config_path.parent() {
-                    std::fs::create_dir_all(parent_dir)?;
-                }
-                let mut file = File::create(config_path)?;
-                file.write_all(ron_str.as_bytes()).map_err(|e| anyhow::anyhow!(e))
-            })
-            .detach();
-
+    fn save(&self, file_format: &FileFormat) -> anyhow::Result<()> {
+        match *file_format {
+            FileFormat::Ron => {
+                ron_file::save_to(self, Self::config_path())?;
+            }
+            FileFormat::Bin => {}
+        }
         Ok(())
     }
 }

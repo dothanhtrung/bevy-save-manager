@@ -1,8 +1,12 @@
-use crate::get_relative_path;
+use crate::file_format::bin_file;
 use crate::setting::{
     GameSetting,
     GameSettingChanged,
     GameSettingPlugin,
+};
+use crate::{
+    FileFormat,
+    get_relative_path,
 };
 use anyhow::anyhow;
 use bevy::app::{
@@ -13,7 +17,6 @@ use bevy::platform::collections::HashMap;
 #[cfg(feature = "log")]
 use bevy::prelude::error;
 use bevy::prelude::{
-    on_message,
     Commands,
     Deref,
     DerefMut,
@@ -28,6 +31,7 @@ use bevy::prelude::{
     Single,
     Update,
     With,
+    on_message,
 };
 use bevy::tasks::IoTaskPool;
 use bevy_rand::prelude::{
@@ -44,13 +48,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use simple_crypt::{
-    decrypt,
-    encrypt,
-};
 use std::fs;
-use std::fs::File;
-use std::io::Write;
 use std::path::{
     Path,
     PathBuf,
@@ -76,6 +74,7 @@ where
 
         app.add_plugins(GameSettingPlugin::<SaveConfig>::default())
             .insert_resource(T::default())
+            .insert_resource(SaveFileFormat(FileFormat::Bin))
             .insert_resource(CurrentSave::default())
             .insert_resource(PlayTimeTrack(0))
             .add_message::<NewSave>()
@@ -96,6 +95,9 @@ where
             .add_systems(Update, on_delete.run_if(on_message::<DeleteSave>));
     }
 }
+
+#[derive(Resource, Deref, DerefMut)]
+pub struct SaveFileFormat(pub FileFormat);
 
 /// Save to current save file.
 #[derive(Message)]
@@ -211,6 +213,7 @@ fn on_load<T>(
     save_config: Res<SaveConfig>,
     mut load_finished: MessageWriter<LoadFinished>,
     channel: Res<IoChannel>,
+    file_format: Res<SaveFileFormat>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -219,9 +222,10 @@ fn on_load<T>(
             let saved_path = save_config.save_dir.join(&info.path);
             let sender = channel.sender.clone();
             let save_id = id.0;
+            let file_format = file_format.0.clone();
             IoTaskPool::get()
                 .spawn(async move {
-                    T::load_from(&saved_path, sender, save_id);
+                    T::load_from(&saved_path, sender, save_id, file_format);
                 })
                 .detach();
         } else {
@@ -242,6 +246,7 @@ fn on_new_save<T>(
     mut play_time_track: ResMut<PlayTimeTrack>,
     channel: Res<IoChannel>,
     data: Res<T>,
+    file_format: Res<SaveFileFormat>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -254,7 +259,7 @@ fn on_new_save<T>(
 
         // TODO: Handle max_key == max of u32
         let save_id = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
-        data.save_to(saved_path.clone(), &channel, save_id);
+        data.save_to(saved_path.clone(), &channel, save_id, &file_format.0);
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -280,6 +285,7 @@ fn on_save<T>(
     save_config: Res<SaveConfig>,
     channel: Res<IoChannel>,
     mut new_save: MessageWriter<NewSave>,
+    file_format: Res<SaveFileFormat>,
 ) where
     T: Resource + EncryptSave,
 {
@@ -287,7 +293,7 @@ fn on_save<T>(
         let save_id = **msg;
         if let Some(info) = save_config.saves.get(&save_id) {
             let saved_path = save_config.save_dir.join(&info.path);
-            save_data.save_to(saved_path.clone(), &channel, save_id);
+            save_data.save_to(saved_path.clone(), &channel, save_id, &file_format.0);
         } else {
             // save_id does not exist. Create a new save.
             new_save.write(NewSave(String::new()));
@@ -376,87 +382,32 @@ fn on_delete(
 pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
     const ENCR_KEY: &'static str = "";
 
-    fn load_from(config_path: &Path, sender: Sender<IoResult>, save_id: u32) {
-        if cfg!(target_family = "wasm") {
-            let _ = sender.send(IoResult::failure(
-                IoAction::Load((save_id, Vec::new())),
-                Err(anyhow!("Not support WASM")),
-            ));
-            return;
-        } else {
-            let enc_saved = match fs::read(config_path) {
-                Ok(ret) => ret,
+    fn load_from(config_path: &Path, sender: Sender<IoResult>, save_id: u32, file_format: FileFormat) {
+        match file_format {
+            FileFormat::Ron => {}
+            FileFormat::Bin => match bin_file::load_from(config_path, Self::ENCR_KEY) {
+                Ok(decrypted) => {
+                    let _ = sender.send(IoResult::success(IoAction::Load((save_id, decrypted))));
+                }
                 Err(e) => {
                     let _ = sender.send(IoResult::failure(
                         IoAction::Load((save_id, Vec::new())),
                         Err(anyhow!(e)),
                     ));
-                    return;
                 }
-            };
-
-            let decrypted = if Self::ENCR_KEY.is_empty() {
-                enc_saved
-            } else {
-                match decrypt(enc_saved.as_slice(), Self::ENCR_KEY.as_bytes()) {
-                    Ok(ret) => ret,
-                    Err(e) => {
-                        let _ = sender.send(IoResult::failure(
-                            IoAction::Load((save_id, Vec::new())),
-                            Err(anyhow!(e)),
-                        ));
-                        return;
-                    }
-                }
-            };
-
-            let _ = sender.send(IoResult::success(IoAction::Load((save_id, decrypted))));
+            },
         }
     }
 
-    fn save_to(&self, saved_path: PathBuf, channel: &IoChannel, save_id: u32) {
+    fn save_to(&self, saved_path: PathBuf, channel: &IoChannel, save_id: u32, file_format: &FileFormat) {
         let sender = channel.sender.clone();
-        if cfg!(target_family = "wasm") {
-            let _ = sender.send(IoResult::failure(
-                IoAction::Save(save_id),
-                Err(anyhow!("Not support WASM")),
-            ));
-            return;
-        } else {
-            let data = match postcard::to_allocvec(self) {
-                Ok(ret) => ret,
-                Err(e) => {
-                    let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
-                    return;
+        match *file_format {
+            FileFormat::Ron => {}
+            FileFormat::Bin => {
+                if let Err(e) = bin_file::save_to(self, saved_path, Self::ENCR_KEY, sender.clone(), save_id) {
+                    let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(e)));
                 }
-            };
-
-            IoTaskPool::get()
-                .spawn(async move {
-                    let enc_saved = if Self::ENCR_KEY.is_empty() {
-                        data
-                    } else {
-                        match encrypt(data.as_slice(), Self::ENCR_KEY.as_bytes()) {
-                            Ok(ret) => ret,
-                            Err(e) => {
-                                let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
-                                return;
-                            }
-                        }
-                    };
-
-                    if let Some(parent_dir) = saved_path.parent()
-                        && let Err(e) = fs::create_dir_all(parent_dir)
-                    {
-                        let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
-                    }
-                    if let Err(e) = File::create(saved_path).and_then(|mut file| file.write_all(enc_saved.as_slice())) {
-                        let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
-                    }
-
-                    let _ = sender.send(IoResult::success(IoAction::Save(save_id)));
-                })
-                .detach();
+            }
         }
     }
 }
