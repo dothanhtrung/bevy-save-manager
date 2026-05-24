@@ -27,7 +27,7 @@ where
     let pretty = PrettyConfig::default();
     let ron_str = to_string_pretty(&data, pretty)?;
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     IoTaskPool::get()
         .spawn(async move {
             if let Some(parent_dir) = config_path.parent() {

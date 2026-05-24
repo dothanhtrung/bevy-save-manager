@@ -147,7 +147,7 @@ struct PlayTimeTrack(u64);
 #[derive(Deserialize, Serialize, Clone)]
 pub struct SaveInfo {
     pub name: String,
-    /// Path to save file
+    /// Path to save file. Alternative to `save_dir`.
     pub path: PathBuf,
     /// Play duration in UNIX epoch
     pub duration: u64,
@@ -178,8 +178,8 @@ impl GameSetting for SaveConfig {
 }
 
 pub enum IoAction {
-    Save(u32),
-    Load((u32, Vec<u8>)),
+    Save(String),
+    Load((String, Vec<u8>)),
 }
 
 pub struct IoResult {
@@ -221,11 +221,10 @@ fn on_load<T>(
         if let Some(info) = save_config.saves.get(&id.0) {
             let saved_path = save_config.save_dir.join(&info.path);
             let sender = channel.sender.clone();
-            let save_id = id.0;
             let file_format = file_format.0.clone();
             IoTaskPool::get()
                 .spawn(async move {
-                    T::load_from(&saved_path, sender, save_id, file_format);
+                    T::load_from(&saved_path, sender, file_format);
                 })
                 .detach();
         } else {
@@ -259,7 +258,7 @@ fn on_new_save<T>(
 
         // TODO: Handle max_key == max of u32
         let save_id = if let Some(max_key) = save_config.saves.keys().max() { max_key + 1 } else { 1 };
-        data.save_to(saved_path.clone(), &channel, save_id, &file_format.0);
+        data.save_to(saved_path.clone(), &channel, &file_format.0);
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -293,7 +292,7 @@ fn on_save<T>(
         let save_id = **msg;
         if let Some(info) = save_config.saves.get(&save_id) {
             let saved_path = save_config.save_dir.join(&info.path);
-            save_data.save_to(saved_path.clone(), &channel, save_id, &file_format.0);
+            save_data.save_to(saved_path.clone(), &channel, &file_format.0);
         } else {
             // save_id does not exist. Create a new save.
             new_save.write(NewSave(String::new()));
@@ -319,7 +318,11 @@ fn listen_channel<T>(
             .unwrap_or_default()
             .as_secs();
         match msg.action {
-            IoAction::Save(save_id) => {
+            IoAction::Save(file_path) => {
+                let save_id = find_save_id(&save_config, &file_path);
+                if save_id == 0 {
+                    continue;
+                }
                 save_config.last_saved = save_id;
                 current_save.save_id = save_id;
 
@@ -332,7 +335,11 @@ fn listen_channel<T>(
                     setting_changed.write(GameSettingChanged);
                 }
             }
-            IoAction::Load((save_id, data)) => {
+            IoAction::Load((file_path, data)) => {
+                let save_id = find_save_id(&save_config, &file_path);
+                if save_id == 0 {
+                    continue;
+                }
                 if msg.result.is_ok() {
                     current_save.save_id = save_id;
                     if let Some(info) = save_config.saves.get(&save_id) {
@@ -382,28 +389,21 @@ fn on_delete(
 pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
     const ENCR_KEY: &'static str = "";
 
-    fn load_from(config_path: &Path, sender: Sender<IoResult>, save_id: u32, file_format: FileFormat) {
+    fn load_from(config_path: &Path, sender: Sender<IoResult>, file_format: FileFormat) {
         match file_format {
             FileFormat::Ron => {}
             FileFormat::Bin => {
-                bin_file::load_from(
-                    PathBuf::from(config_path),
-                    sender,
-                    save_id,
-                    String::from(Self::ENCR_KEY),
-                );
+                bin_file::load_from(PathBuf::from(config_path), sender, String::from(Self::ENCR_KEY));
             }
         }
     }
 
-    fn save_to(&self, saved_path: PathBuf, channel: &IoChannel, save_id: u32, file_format: &FileFormat) {
+    fn save_to(&self, saved_path: PathBuf, channel: &IoChannel, file_format: &FileFormat) {
         let sender = channel.sender.clone();
         match *file_format {
             FileFormat::Ron => {}
             FileFormat::Bin => {
-                if let Err(e) = bin_file::save_to(self, saved_path, Self::ENCR_KEY, sender.clone(), save_id) {
-                    let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(e)));
-                }
+                bin_file::save_to(self, saved_path, Self::ENCR_KEY, sender.clone());
             }
         }
     }
@@ -419,4 +419,16 @@ fn random_string(rng: &mut WyRand) -> String {
             CHARSET[idx] as char
         })
         .collect()
+}
+
+fn find_save_id(save_config: &SaveConfig, file_path: &str) -> u32 {
+    if file_path.is_empty() {
+        return 0;
+    }
+    for (id, info) in save_config.saves.iter() {
+        if file_path == save_config.save_dir.join(&info.path).to_str().unwrap_or_default() {
+            return *id;
+        }
+    }
+    0
 }

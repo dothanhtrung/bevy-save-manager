@@ -13,20 +13,22 @@ use crate::save::{
     IoResult,
 };
 
-pub(crate) fn load_from(config_path: PathBuf, sender: Sender<IoResult>, save_id: u32, encrypt_key: String) {
+pub(crate) fn load_from(save_path: PathBuf, sender: Sender<IoResult>, encrypt_key: String) {
+    let file_path_str = save_path.to_str().unwrap_or_default().to_string();
     if cfg!(target_family = "wasm") {
         let _ = sender.send(IoResult::failure(
-            IoAction::Load((save_id, Vec::new())),
+            IoAction::Load((file_path_str, Vec::new())),
             Err(anyhow!("Not support WASM")),
         ));
+        return;
     } else {
         IoTaskPool::get()
             .spawn(async move {
-                let enc_saved = match fs::read(config_path) {
+                let enc_saved = match fs::read(save_path) {
                     Ok(ret) => ret,
                     Err(e) => {
                         let _ = sender.send(IoResult::failure(
-                            IoAction::Load((save_id, Vec::new())),
+                            IoAction::Load((file_path_str, Vec::new())),
                             Err(anyhow!(e)),
                         ));
                         return;
@@ -40,34 +42,40 @@ pub(crate) fn load_from(config_path: PathBuf, sender: Sender<IoResult>, save_id:
                         Ok(ret) => ret,
                         Err(e) => {
                             let _ = sender.send(IoResult::failure(
-                                IoAction::Load((save_id, Vec::new())),
+                                IoAction::Load((file_path_str, Vec::new())),
                                 Err(anyhow!(e)),
                             ));
                             return;
                         }
                     }
                 };
-                let _ = sender.send(IoResult::success(IoAction::Load((save_id, decrypted))));
+                let _ = sender.send(IoResult::success(IoAction::Load((file_path_str, decrypted))));
             })
             .detach();
     }
 }
 
-pub(crate) fn save_to<T>(
-    data: &T,
-    saved_path: PathBuf,
-    encrypt_key: &str,
-    sender: Sender<IoResult>,
-    save_id: u32,
-) -> anyhow::Result<()>
+pub(crate) fn save_to<T>(data: &T, save_path: PathBuf, encrypt_key: &str, sender: Sender<IoResult>)
 where
     T: Serialize,
 {
+    let file_path_str = save_path.to_str().unwrap_or_default().to_string();
     if cfg!(target_family = "wasm") {
-        return Err(anyhow!("Not support WASM"));
+        let _ = sender.send(IoResult::failure(
+            IoAction::Save(file_path_str),
+            Err(anyhow!("Not support WASM")),
+        ));
+        return;
     } else {
-        let data = postcard::to_allocvec(data)?;
+        let data = match postcard::to_allocvec(data) {
+            Ok(ret) => ret,
+            Err(e) => {
+                let _ = sender.send(IoResult::failure(IoAction::Save(file_path_str), Err(anyhow!(e))));
+                return;
+            }
+        };
         let encrypt_key = String::from(encrypt_key);
+
         IoTaskPool::get()
             .spawn(async move {
                 let enc_saved = if encrypt_key.is_empty() {
@@ -76,24 +84,25 @@ where
                     match encrypt(data.as_slice(), encrypt_key.as_bytes()) {
                         Ok(ret) => ret,
                         Err(e) => {
-                            let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
+                            let _ = sender.send(IoResult::failure(IoAction::Save(file_path_str), Err(anyhow!(e))));
                             return;
                         }
                     }
                 };
 
-                if let Some(parent_dir) = saved_path.parent()
+                if let Some(parent_dir) = save_path.parent()
                     && let Err(e) = fs::create_dir_all(parent_dir)
                 {
-                    let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
+                    let _ = sender.send(IoResult::failure(IoAction::Save(file_path_str), Err(anyhow!(e))));
+                    return;
                 }
-                if let Err(e) = File::create(saved_path).and_then(|mut file| file.write_all(enc_saved.as_slice())) {
-                    let _ = sender.send(IoResult::failure(IoAction::Save(save_id), Err(anyhow!(e))));
+                if let Err(e) = File::create(save_path).and_then(|mut file| file.write_all(enc_saved.as_slice())) {
+                    let _ = sender.send(IoResult::failure(IoAction::Save(file_path_str), Err(anyhow!(e))));
+                    return;
                 }
 
-                let _ = sender.send(IoResult::success(IoAction::Save(save_id)));
+                let _ = sender.send(IoResult::success(IoAction::Save(file_path_str)));
             })
             .detach();
     }
-    Ok(())
 }
