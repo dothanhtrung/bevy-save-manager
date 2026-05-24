@@ -1,23 +1,28 @@
+use crate::file_format::{
+    IoAction,
+    IoResult,
+};
 use anyhow::anyhow;
 use bevy::tasks::IoTaskPool;
 use crossbeam_channel::Sender;
-use serde::Serialize;
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use simple_crypt::encrypt;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::save::{
-    IoAction,
-    IoResult,
-};
-
-pub(crate) fn load_from(save_path: PathBuf, sender: Sender<IoResult>, encrypt_key: String) {
+pub(crate) fn load_from<T>(save_path: PathBuf, sender: Sender<IoResult<T>>, encrypt_key: String)
+where
+    T: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+{
     let file_path_str = save_path.to_str().unwrap_or_default().to_string();
     if cfg!(target_family = "wasm") {
         let _ = sender.send(IoResult::failure(
-            IoAction::Load((file_path_str, Vec::new())),
+            IoAction::Load((file_path_str, None)),
             Err(anyhow!("Not support WASM")),
         ));
         return;
@@ -28,7 +33,7 @@ pub(crate) fn load_from(save_path: PathBuf, sender: Sender<IoResult>, encrypt_ke
                     Ok(ret) => ret,
                     Err(e) => {
                         let _ = sender.send(IoResult::failure(
-                            IoAction::Load((file_path_str, Vec::new())),
+                            IoAction::Load((file_path_str, None)),
                             Err(anyhow!(e)),
                         ));
                         return;
@@ -42,22 +47,33 @@ pub(crate) fn load_from(save_path: PathBuf, sender: Sender<IoResult>, encrypt_ke
                         Ok(ret) => ret,
                         Err(e) => {
                             let _ = sender.send(IoResult::failure(
-                                IoAction::Load((file_path_str, Vec::new())),
+                                IoAction::Load((file_path_str, None)),
                                 Err(anyhow!(e)),
                             ));
                             return;
                         }
                     }
                 };
-                let _ = sender.send(IoResult::success(IoAction::Load((file_path_str, decrypted))));
+                match postcard::from_bytes(decrypted.as_slice()) {
+                    Ok(ret) => {
+                        let _ = sender.send(IoResult::success(IoAction::Load((file_path_str, ret))));
+                    }
+                    Err(e) => {
+                        let _ = sender.send(IoResult::failure(
+                            IoAction::Load((file_path_str, None)),
+                            Err(anyhow!(e)),
+                        ));
+                        return;
+                    }
+                }
             })
             .detach();
     }
 }
 
-pub(crate) fn save_to<T>(data: &T, save_path: PathBuf, encrypt_key: &str, sender: Sender<IoResult>)
+pub(crate) fn save_to<T>(data: &T, save_path: PathBuf, encrypt_key: &str, sender: Sender<IoResult<T>>)
 where
-    T: Serialize,
+    T: Serialize + for<'de> Deserialize<'de> + Send + 'static,
 {
     let file_path_str = save_path.to_str().unwrap_or_default().to_string();
     if cfg!(target_family = "wasm") {

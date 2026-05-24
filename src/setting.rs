@@ -1,4 +1,8 @@
-use crate::file_format::ron_file;
+use crate::file_format::{
+    IoChannel,
+    IoResult,
+    ron_file,
+};
 use crate::{
     FileFormat,
     get_relative_path,
@@ -20,6 +24,7 @@ use bevy::prelude::{
     Update,
     on_message,
 };
+use crossbeam_channel::Sender;
 use serde::{
     Deserialize,
     Serialize,
@@ -61,10 +66,11 @@ fn load_config<T>(
     mut config: ResMut<T>,
     mut event: MessageWriter<GameSettingLoaded>,
     file_format: Res<SettingFileFormat>,
+    channel: Res<IoChannel>,
 ) where
     T: Resource + GameSetting,
 {
-    if let Err(_e) = config.load(&file_format.0) {
+    if let Err(_e) = config.load(&channel.sender, &file_format.0) {
         #[cfg(feature = "log")]
         warn!(
             "Failed to load game config {} : {}",
@@ -76,11 +82,11 @@ fn load_config<T>(
     }
 }
 
-fn save_config<T>(config: Res<T>, file_format: Res<SettingFileFormat>)
+fn save_config<T>(config: Res<T>, file_format: Res<SettingFileFormat>, channel: Res<IoChannel>)
 where
     T: Resource + GameSetting,
 {
-    if let Err(_e) = config.save(&file_format.0) {
+    if let Err(_e) = config.save(&channel.sender, &file_format.0) {
         #[cfg(feature = "log")]
         warn!(
             "Failed to save game config {}: {}",
@@ -102,20 +108,20 @@ pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
         ret
     }
 
-    fn load(&mut self, file_format: &FileFormat) -> anyhow::Result<()> {
+    fn load(&mut self, sender: &Sender<IoResult>, file_format: &FileFormat) -> anyhow::Result<()> {
         match *file_format {
             FileFormat::Ron => {
-                *self = ron_file::load_from(&Self::config_path())?;
+                *self = ron_file::load_from(Self::config_path(), sender.clone())?;
             }
             FileFormat::Bin => {}
         }
         Ok(())
     }
 
-    fn save(&self, file_format: &FileFormat) -> anyhow::Result<()> {
+    fn save(&self, sender: &Sender<IoResult>, file_format: &FileFormat) -> anyhow::Result<()> {
         match *file_format {
             FileFormat::Ron => {
-                ron_file::save_to(self, Self::config_path())?;
+                ron_file::save_to(self, Self::config_path(), sender.clone())?;
             }
             FileFormat::Bin => {}
         }
