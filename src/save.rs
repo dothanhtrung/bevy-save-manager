@@ -385,17 +385,14 @@ pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
     fn load_from(config_path: &Path, sender: Sender<IoResult>, save_id: u32, file_format: FileFormat) {
         match file_format {
             FileFormat::Ron => {}
-            FileFormat::Bin => match bin_file::load_from(config_path, Self::ENCR_KEY) {
-                Ok(decrypted) => {
-                    let _ = sender.send(IoResult::success(IoAction::Load((save_id, decrypted))));
-                }
-                Err(e) => {
-                    let _ = sender.send(IoResult::failure(
-                        IoAction::Load((save_id, Vec::new())),
-                        Err(anyhow!(e)),
-                    ));
-                }
-            },
+            FileFormat::Bin => {
+                bin_file::load_from(
+                    PathBuf::from(config_path),
+                    sender,
+                    save_id,
+                    String::from(Self::ENCR_KEY),
+                );
+            }
         }
     }
 

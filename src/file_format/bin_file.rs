@@ -6,30 +6,60 @@ use simple_crypt::encrypt;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::path::{
-    Path,
-    PathBuf,
+use std::path::PathBuf;
+
+use crate::save::{
+    IoAction,
+    IoResult,
 };
 
-use crate::save::{IoAction, IoResult};
-
-pub(crate) fn load_from(config_path: &Path, encrypt_key: &str) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn load_from(config_path: PathBuf, sender: Sender<IoResult>, save_id: u32, encrypt_key: String) {
     if cfg!(target_family = "wasm") {
-        Err(anyhow!("Not support WASM"))
+        let _ = sender.send(IoResult::failure(
+            IoAction::Load((save_id, Vec::new())),
+            Err(anyhow!("Not support WASM")),
+        ));
     } else {
-        let enc_saved = fs::read(config_path)?;
+        IoTaskPool::get()
+            .spawn(async move {
+                let enc_saved = match fs::read(config_path) {
+                    Ok(ret) => ret,
+                    Err(e) => {
+                        let _ = sender.send(IoResult::failure(
+                            IoAction::Load((save_id, Vec::new())),
+                            Err(anyhow!(e)),
+                        ));
+                        return;
+                    }
+                };
 
-        let decrypted = if encrypt_key.is_empty() {
-            enc_saved
-        } else {
-            simple_crypt::decrypt(enc_saved.as_slice(), encrypt_key.as_bytes())?
-        };
-
-        Ok(decrypted)
+                let decrypted = if encrypt_key.is_empty() {
+                    enc_saved
+                } else {
+                    match simple_crypt::decrypt(enc_saved.as_slice(), encrypt_key.as_bytes()) {
+                        Ok(ret) => ret,
+                        Err(e) => {
+                            let _ = sender.send(IoResult::failure(
+                                IoAction::Load((save_id, Vec::new())),
+                                Err(anyhow!(e)),
+                            ));
+                            return;
+                        }
+                    }
+                };
+                let _ = sender.send(IoResult::success(IoAction::Load((save_id, decrypted))));
+            })
+            .detach();
     }
 }
 
-pub(crate) fn save_to<T>(data: &T, saved_path: PathBuf, encrypt_key: &str, sender: Sender<IoResult>, save_id: u32) -> anyhow::Result<()>
+pub(crate) fn save_to<T>(
+    data: &T,
+    saved_path: PathBuf,
+    encrypt_key: &str,
+    sender: Sender<IoResult>,
+    save_id: u32,
+) -> anyhow::Result<()>
 where
     T: Serialize,
 {
