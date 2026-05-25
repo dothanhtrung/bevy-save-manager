@@ -4,9 +4,9 @@
 use std::env;
 use std::path::PathBuf;
 
+mod file_format;
 pub mod save;
 pub mod setting;
-mod file_format;
 
 #[derive(Default, PartialEq, Eq, Clone)]
 pub enum FileFormat {

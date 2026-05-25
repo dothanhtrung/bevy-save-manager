@@ -11,37 +11,40 @@ use serde::{
 pub(crate) mod bin_file;
 pub(crate) mod ron_file;
 
-pub enum IoAction<T>
-where
-    T: Serialize + for<'de> Deserialize<'de>,
-{
+pub enum IoAction {
     Save(String),
-    Load((String, Option<T>)), // TODO: Return data should be in IoResult
+    Load(String),
 }
 
 pub struct IoResult<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
-    pub action: IoAction<T>,
-    pub result: anyhow::Result<()>,
+    pub action: IoAction,
+    pub result: Result<Option<T>, String>,
 }
 
 impl<T> IoResult<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
-    pub fn success(action: IoAction<T>) -> Self {
-        Self { action, result: Ok(()) }
+    pub fn success(action: IoAction, data: Option<T>) -> Self {
+        Self {
+            action,
+            result: Ok(data),
+        }
     }
 
-    pub fn failure(action: IoAction<T>, result: anyhow::Result<()>) -> Self {
-        Self { action, result }
+    pub fn failure(action: IoAction, err: &str) -> Self {
+        Self {
+            action,
+            result: Err(err.to_string()),
+        }
     }
 }
 
 #[derive(Resource)]
-pub(crate) struct IoChannel<T>
+pub struct IoChannel<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {

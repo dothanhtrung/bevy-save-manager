@@ -1,6 +1,8 @@
 use crate::file_format::{
+    IoAction,
     IoChannel,
     IoResult,
+    bin_file,
     ron_file,
 };
 use crate::{
@@ -8,6 +10,7 @@ use crate::{
     get_relative_path,
 };
 use bevy::app::App;
+use bevy::ecs::system::Commands;
 #[cfg(feature = "log")]
 use bevy::prelude::warn;
 use bevy::prelude::{
@@ -48,8 +51,9 @@ where
             .insert_resource(SettingFileFormat::default())
             .add_message::<GameSettingChanged>()
             .add_message::<GameSettingLoaded>()
-            .add_systems(Startup, load_config::<T>)
-            .add_systems(Update, save_config::<T>.run_if(on_message::<GameSettingChanged>));
+            .add_systems(Startup, (setup_channel::<T>, load_config::<T>).chain())
+            .add_systems(Update, save_config::<T>.run_if(on_message::<GameSettingChanged>))
+            .add_systems(Update, listen_channel::<T>);
     }
 }
 
@@ -60,44 +64,71 @@ pub struct SettingFileFormat(pub FileFormat);
 pub struct GameSettingChanged;
 
 #[derive(Message)]
-pub struct GameSettingLoaded;
+pub struct GameSettingLoaded(pub Result<(), String>);
 
-fn load_config<T>(
-    mut config: ResMut<T>,
-    mut event: MessageWriter<GameSettingLoaded>,
-    file_format: Res<SettingFileFormat>,
-    channel: Res<IoChannel>,
+#[derive(Message)]
+pub struct GameSettingSaved(pub Result<(), String>);
+
+fn setup_channel<T>(mut commands: Commands)
+where
+    T: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+{
+    let (sender, receiver) = crossbeam_channel::unbounded::<IoResult<T>>();
+    commands.insert_resource(IoChannel { sender, receiver });
+}
+
+fn listen_channel<T>(
+    channel: Res<IoChannel<T>>,
+    mut setting: ResMut<T>,
+    mut save_message: MessageWriter<GameSettingSaved>,
+    mut load_message: MessageWriter<GameSettingLoaded>,
 ) where
     T: Resource + GameSetting,
 {
-    if let Err(_e) = config.load(&channel.sender, &file_format.0) {
-        #[cfg(feature = "log")]
-        warn!(
-            "Failed to load game config {} : {}",
-            T::config_path().as_path().to_str().unwrap_or_default(),
-            _e
-        );
-    } else {
-        event.write(GameSettingLoaded);
+    for msg in channel.receiver.try_iter() {
+        match msg.action {
+            IoAction::Save(_) => match msg.result {
+                Ok(_) => {
+                    save_message.write(GameSettingSaved(Ok(())));
+                }
+                Err(e) => {
+                    save_message.write(GameSettingSaved(Err(e.to_string())));
+                    continue;
+                }
+            },
+            IoAction::Load(_) => match msg.result {
+                Ok(Some(data)) => {
+                    *setting = data;
+                    load_message.write(GameSettingLoaded(Ok(())));
+                }
+                Ok(None) => {
+                    load_message.write(GameSettingLoaded(Err("Data is empty".to_string())));
+                    continue;
+                }
+                Err(e) => {
+                    load_message.write(GameSettingLoaded(Err(e)));
+                    continue;
+                }
+            },
+        }
     }
 }
 
-fn save_config<T>(config: Res<T>, file_format: Res<SettingFileFormat>, channel: Res<IoChannel>)
+fn load_config<T>(mut config: ResMut<T>, file_format: Res<SettingFileFormat>, channel: Res<IoChannel<T>>)
 where
     T: Resource + GameSetting,
 {
-    if let Err(_e) = config.save(&channel.sender, &file_format.0) {
-        #[cfg(feature = "log")]
-        warn!(
-            "Failed to save game config {}: {}",
-            T::config_path().as_path().to_str().unwrap_or_default(),
-            _e
-        );
-    }
+    config.load(&channel.sender, &file_format.0);
 }
 
-// TODO: Return Load/Save Result
-pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
+fn save_config<T>(config: Res<T>, file_format: Res<SettingFileFormat>, channel: Res<IoChannel<T>>)
+where
+    T: Resource + GameSetting,
+{
+    config.save(&channel.sender, &file_format.0);
+}
+
+pub trait GameSetting: Serialize + for<'de> Deserialize<'de> + Send + 'static {
     const DEFAULT_CONF: &'static str = "game_setting.conf";
 
     fn config_path() -> PathBuf {
@@ -108,23 +139,25 @@ pub trait GameSetting: Serialize + for<'de> Deserialize<'de> {
         ret
     }
 
-    fn load(&mut self, sender: &Sender<IoResult>, file_format: &FileFormat) -> anyhow::Result<()> {
+    fn load(&mut self, sender: &Sender<IoResult<Self>>, file_format: &FileFormat) {
         match *file_format {
             FileFormat::Ron => {
-                *self = ron_file::load_from(Self::config_path(), sender.clone())?;
+                ron_file::load_from(Self::config_path(), sender.clone());
             }
-            FileFormat::Bin => {}
+            FileFormat::Bin => {
+                bin_file::load_from(Self::config_path(), sender.clone(), String::new());
+            }
         }
-        Ok(())
     }
 
-    fn save(&self, sender: &Sender<IoResult>, file_format: &FileFormat) -> anyhow::Result<()> {
+    fn save(&self, sender: &Sender<IoResult<Self>>, file_format: &FileFormat) {
         match *file_format {
             FileFormat::Ron => {
-                ron_file::save_to(self, Self::config_path(), sender.clone())?;
+                ron_file::save_to(self, Self::config_path(), sender.clone());
             }
-            FileFormat::Bin => {}
+            FileFormat::Bin => {
+                ron_file::save_to(self, Self::config_path(), sender.clone());
+            }
         }
-        Ok(())
     }
 }

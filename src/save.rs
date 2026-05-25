@@ -3,6 +3,7 @@ use crate::file_format::{
     IoChannel,
     IoResult,
     bin_file,
+    ron_file,
 };
 use crate::setting::{
     GameSetting,
@@ -13,7 +14,6 @@ use crate::{
     FileFormat,
     get_relative_path,
 };
-use anyhow::anyhow;
 use bevy::app::{
     App,
     Startup,
@@ -43,10 +43,7 @@ use bevy_rand::prelude::{
     GlobalRng,
     WyRand,
 };
-use crossbeam_channel::{
-    Receiver,
-    Sender,
-};
+use crossbeam_channel::Sender;
 use rand::RngExt;
 use serde::{
     Deserialize,
@@ -126,11 +123,11 @@ pub struct LoadRecent;
 
 /// Fired when loading from file finished
 #[derive(Message, Deref, DerefMut)]
-pub struct LoadGameSaveFinished(pub anyhow::Result<()>);
+pub struct LoadGameSaveFinished(pub Result<(), String>);
 
 /// Fired when saving to file finished
 #[derive(Message, Deref, DerefMut)]
-pub struct SaveGameFinished(pub anyhow::Result<()>);
+pub struct SaveGameFinished(pub Result<(), String>);
 
 #[derive(Resource, Default)]
 pub struct CurrentSave {
@@ -181,7 +178,7 @@ impl GameSetting for SaveConfig {
     const DEFAULT_CONF: &'static str = "saves/save_setting.conf";
 }
 
-pub fn setup_channel<T>(mut commands: Commands)
+fn setup_channel<T>(mut commands: Commands)
 where
     T: Serialize + for<'de> Deserialize<'de> + Send + 'static,
 {
@@ -203,7 +200,7 @@ fn on_load<T>(
             let saved_path = save_config.save_dir.join(&info.path);
             T::load_from(&saved_path, &channel.sender, &file_format);
         } else {
-            load_finished.write(LoadGameSaveFinished(Err(anyhow!("Save file does not exist"))));
+            load_finished.write(LoadGameSaveFinished(Err("Save file does not exist".to_string())));
         }
     }
 }
@@ -301,7 +298,15 @@ fn listen_channel<T>(
                 save_config.last_saved = save_id;
                 current_save.save_id = save_id;
 
-                save_message.write(SaveGameFinished(msg.result));
+                match msg.result {
+                    Ok(_) => {
+                        save_message.write(SaveGameFinished(Ok(())));
+                    }
+                    Err(e) => {
+                        save_message.write(SaveGameFinished(Err(e.to_string())));
+                        continue;
+                    }
+                }
 
                 if let Some(info) = save_config.saves.get_mut(&save_id) {
                     current_save.duration += now - **play_time_track;
@@ -310,28 +315,30 @@ fn listen_channel<T>(
                     setting_changed.write(GameSettingChanged);
                 }
             }
-            IoAction::Load((file_path, data)) => {
+            IoAction::Load(file_path) => {
                 let save_id = find_save_id(&save_config, &file_path);
                 if save_id == 0 {
                     continue;
                 }
                 match msg.result {
-                    Ok(data)
-                    current_save.save_id = save_id;
-                    if let Some(info) = save_config.saves.get(&save_id) {
-                        current_save.duration = info.duration;
+                    Ok(Some(data)) => {
+                        *save_data = data;
+                        load_message.write(LoadGameSaveFinished(Ok(())));
                     }
-                    *save_data = data;
-                    // match postcard::from_bytes(data.as_slice()) {
-                    //     Ok(ret) => *save_data = ret,
-                    //     Err(e) => {
-                    //         load_message.write(LoadGameSaveFinished(Err(anyhow!(e))));
-                    //         continue;
-                    //     }
-                    // }
-                    load_message.write(LoadGameSaveFinished(msg.result));
-                    **play_time_track = now;
+                    Ok(None) => {
+                        load_message.write(LoadGameSaveFinished(Err("Data is empty".to_string())));
+                        continue;
+                    }
+                    Err(e) => {
+                        load_message.write(LoadGameSaveFinished(Err(e)));
+                        continue;
+                    }
                 }
+                current_save.save_id = save_id;
+                if let Some(info) = save_config.saves.get(&save_id) {
+                    current_save.duration = info.duration;
+                }
+                **play_time_track = now;
             }
         }
     }
@@ -363,12 +370,14 @@ fn on_delete(
     }
 }
 
-pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
+pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> + Send + 'static {
     const ENCR_KEY: &'static str = "";
 
     fn load_from(config_path: &Path, sender: &Sender<IoResult<Self>>, file_format: &FileFormat) {
         match *file_format {
-            FileFormat::Ron => {}
+            FileFormat::Ron => {
+                ron_file::load_from(PathBuf::from(config_path), sender.clone());
+            }
             FileFormat::Bin => {
                 bin_file::load_from(PathBuf::from(config_path), sender.clone(), String::from(Self::ENCR_KEY));
             }
@@ -378,7 +387,9 @@ pub trait EncryptSave: Serialize + for<'de> Deserialize<'de> {
     fn save_to(&self, saved_path: PathBuf, channel: &IoChannel<Self>, file_format: &FileFormat) {
         let sender = channel.sender.clone();
         match *file_format {
-            FileFormat::Ron => {}
+            FileFormat::Ron => {
+                ron_file::save_to(self, saved_path, sender.clone());
+            }
             FileFormat::Bin => {
                 bin_file::save_to(self, saved_path, Self::ENCR_KEY, sender.clone());
             }
