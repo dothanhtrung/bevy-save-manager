@@ -51,6 +51,7 @@ where
             .insert_resource(SettingFileFormat::default())
             .add_message::<GameSettingChanged>()
             .add_message::<GameSettingLoaded>()
+            .add_message::<GameSettingSaved>()
             .add_systems(Startup, (setup_channel::<T>, load_config::<T>).chain())
             .add_systems(Update, save_config::<T>.run_if(on_message::<GameSettingChanged>))
             .add_systems(Update, listen_channel::<T>);
