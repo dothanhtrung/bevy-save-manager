@@ -10,6 +10,7 @@ use crate::{
     get_relative_path,
 };
 use bevy::app::App;
+use bevy::ecs::component::Mutable;
 use bevy::ecs::system::Commands;
 #[cfg(feature = "log")]
 use bevy::prelude::warn;
@@ -44,7 +45,7 @@ where
 
 impl<T> Plugin for GameSettingPlugin<T>
 where
-    T: Resource + Default + GameSetting,
+    T: Resource<Mutability = Mutable> + Default + GameSetting,
 {
     fn build(&self, app: &mut App) {
         app.insert_resource(T::default())
@@ -84,7 +85,7 @@ fn listen_channel<T>(
     mut save_message: MessageWriter<GameSettingSaved>,
     mut load_message: MessageWriter<GameSettingLoaded>,
 ) where
-    T: Resource + GameSetting,
+    T: Resource<Mutability = Mutable> + GameSetting,
 {
     for msg in channel.receiver.try_iter() {
         match msg.action {
@@ -117,7 +118,7 @@ fn listen_channel<T>(
 
 fn load_config<T>(mut config: ResMut<T>, file_format: Res<SettingFileFormat>, channel: Res<IoChannel<T>>)
 where
-    T: Resource + GameSetting,
+    T: Resource<Mutability = Mutable> + GameSetting,
 {
     config.load(&channel.sender, &file_format.0);
 }

@@ -18,6 +18,7 @@ use bevy::app::{
     App,
     Startup,
 };
+use bevy::ecs::component::Mutable;
 use bevy::platform::collections::HashMap;
 #[cfg(feature = "log")]
 use bevy::prelude::error;
@@ -66,7 +67,7 @@ where
 
 impl<T> Plugin for GameSavePlugin<T>
 where
-    T: Resource + Default + EncryptSave,
+    T: Resource<Mutability = Mutable> + Default + EncryptSave,
 {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<EntropyPlugin<WyRand>>() {
@@ -282,7 +283,7 @@ fn listen_channel<T>(
     mut setting_changed: MessageWriter<GameSettingChanged>,
     mut play_time_track: ResMut<PlayTimeTrack>,
 ) where
-    T: Resource + EncryptSave,
+    T: Resource<Mutability = Mutable> + EncryptSave,
 {
     for msg in channel.receiver.try_iter() {
         let now = SystemTime::now()
